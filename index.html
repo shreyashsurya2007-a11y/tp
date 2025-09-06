@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Guess the Number (1-100)</title>
+<style>
+  body { font-family: system-ui, -apple-system, "Segoe UI", Roboto, Arial; display:flex; align-items:center; justify-content:center; min-height:100vh; background:#f4f7fb; margin:0; }
+  .card { width:100%; max-width:520px; background:white; border-radius:12px; box-shadow:0 6px 24px rgba(20,20,40,0.08); padding:22px; }
+  h1 { margin:0 0 8px 0; font-size:20px;}
+  p.sub { margin:0 0 18px 0; color:#555; }
+  .row { display:flex; gap:8px; margin-bottom:12px; }
+  input[type="number"], input[type="text"] { flex:1; padding:10px 12px; font-size:16px; border:1px solid #ddd; border-radius:8px; }
+  button { padding:10px 12px; border-radius:8px; border:0; background:#2b6ef6; color:white; font-weight:600; cursor:pointer; }
+  button.ghost { background:transparent; color:#2b6ef6; border:1px solid #cfe0ff; }
+  .info { display:flex; gap:12px; color:#333; margin-bottom:12px; flex-wrap:wrap; }
+  .info span { background:#f0f6ff; padding:6px 8px; border-radius:8px; font-size:13px; }
+  .log { background:#fbfdff; border:1px dashed #e2e8f0; padding:10px; border-radius:8px; min-height:60px; margin-bottom:12px; color:#222; }
+  .hint { font-weight:700; margin-top:6px; color:#d9480f; }
+  .success { color: #0b7a3a; font-weight:800; }
+  .error { color:#d03a3a; font-weight:700; }
+  .small { font-size:13px; color:#555; }
+  footer { margin-top:12px; display:flex; justify-content:space-between; align-items:center; gap:8px; flex-wrap:wrap; }
+</style>
+</head>
+<body>
+  <div class="card" id="app">
+    <h1>Guess the Number (1–100)</h1>
+    <p class="sub">You get <strong>5 attempts</strong> per round. After 5 wrong attempts the number changes and a new round starts. The game records rounds and attempts and sends your score when you finish.</p>
+
+    <div id="nameArea" class="row">
+      <input type="text" id="playerName" placeholder="Enter your name (or pass ?name=YourName in URL)"/>
+      <button id="startBtn">Start Game</button>
+    </div>
+
+    <div id="gameArea" style="display:none;">
+      <div class="info">
+        <span id="roundBadge">Round: 0</span>
+        <span id="attBadge">Attempts left (this round): 5</span>
+        <span id="totalBadge">Total attempts: 0</span>
+      </div>
+
+      <div class="row">
+        <input type="number" id="guessInput" placeholder="Enter your guess (1-100)" min="1" max="100"/>
+        <button id="guessBtn">Guess</button>
+        <button id="giveUpBtn" class="ghost">Give Up</button>
+      </div>
+
+      <div class="log" id="log"></div>
+      <div id="hint" class="hint"></div>
+      <footer>
+        <div class="small">Secret resets after 5 wrong attempts. Win ends the game and sends result to Google Sheet.</div>
+        <div>
+          <button id="restartBtn" class="ghost">Restart</button>
+        </div>
+      </footer>
+    </div>
+
+    <div id="resultArea" style="display:none; margin-top:12px;">
+      <p id="resultMessage"></p>
+      <p class="small" id="serverResponse" style="margin-top:6px;"></p>
+    </div>
+  </div>
+
+<script>
+(() => {
+  // ====== CONFIG: replace this with your Apps Script Web App URL ======
+  const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwDFwWaUSWZbW4m62TWy-V0xkTSQymRfXzBiNRhm74oMR1chypYaOmsMgo37eMBi2TN/exec"; // <<------ REPLACE THIS
+
+  // ====== Game state ======
+  let secret = null;
+  let attemptsLeft = 5;
+  let attemptsThisRound = 0;
+  let totalAttempts = 0;
+  let roundCount = 0;
+  let playerName = "";
+  let gameActive = false;
+  const maxAttemptsPerRound = 5;
+
+  // ====== DOM ======
+  const nameArea = document.getElementById('nameArea');
+  const playerNameInput = document.getElementById('playerName');
+  const startBtn = document.getElementById('startBtn');
+  const gameArea = document.getElementById('gameArea');
+  const guessInput = document.getElementById('guessInput');
+  const guessBtn = document.getElementById('guessBtn');
+  const giveUpBtn = document.getElementById('giveUpBtn');
+  const restartBtn = document.getElementById('restartBtn');
+  const logEl = document.getElementById('log');
+  const hintEl = document.getElementById('hint');
+  const roundBadge = document.getElementById('roundBadge');
+  const attBadge = document.getElementById('attBadge');
+  const totalBadge = document.getElementById('totalBadge');
+  const resultArea = document.getElementById('resultArea');
+  const resultMessage = document.getElementById('resultMessage');
+  const serverResponse = document.getElementById('serverResponse');
+
+  // ====== Helpers ======
+  function rand100(){ return Math.floor(Math.random()*100)+1; }
+  function startNewRound(){
+    secret = rand100();
+    attemptsLeft = maxAttemptsPerRound;
+    attemptsThisRound = 0;
+    roundCount++;
+    updateUI();
+    appendLog(`New round started. Try to guess the number (1-100).`);
+    hintEl.textContent = '';
+  }
+  function updateUI(){
+    roundBadge.textContent = `Round: ${roundCount}`;
+    attBadge.textContent = `Attempts left (this round): ${attemptsLeft}`;
+    totalBadge.textContent = `Total attempts: ${totalAttempts}`;
+  }
+  function appendLog(txt){
+    const time = new Date().toLocaleTimeString();
+    logEl.innerHTML = `<div>[${time}] ${txt}</div>` + logEl.innerHTML;
+  }
+  function endGame(resultText, resultStatus){
+    gameActive = false;
+    guessInput.disabled = true;
+    guessBtn.disabled = true;
+    giveUpBtn.disabled = true;
+    resultArea.style.display = 'block';
+    resultMessage.innerHTML = `<span class="${resultStatus==='win'?'success':'error'}">${resultText}</span><br><small>Rounds played: ${roundCount} • Total attempts: ${totalAttempts}</small>`;
+    // Send result to server
+    sendResultToServer(resultStatus);
+  }
+
+  function sendResultToServer(resultStatus){
+    // Prepare payload - align with your Apps Script doPost fields:
+    const payload = {
+      name: playerName,
+      rounds: roundCount,
+      score: totalAttempts, // storing totalAttempts as "score"
+      result: resultStatus === 'win' ? 'Win' : 'Lose'
+    };
+
+    if (!WEB_APP_URL || WEB_APP_URL.includes("WEB_APP_URL_HERE")) {
+      serverResponse.textContent = "Web app URL not configured. Replace WEB_APP_URL in the script.";
+      return;
+    }
+
+    serverResponse.textContent = "Sending result to server...";
+
+    fetch(WEB_APP_URL, {
+      method: "POST",
+      mode: "cors",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload)
+    }).then(r => r.json ? r.json() : r.text())
+      .then(data => {
+        serverResponse.textContent = "Saved: " + (typeof data === 'object' ? JSON.stringify(data) : data);
+      }).catch(err => {
+        serverResponse.textContent = "Failed to send result: " + err.message;
+      });
+  }
+
+  // ====== Event handlers ======
+  startBtn.addEventListener('click', () => {
+    let nameFromUrl = (new URL(location.href)).searchParams.get('name') || "";
+    playerName = nameFromUrl.trim() || playerNameInput.value.trim();
+    if (!playerName) { alert('Please enter your name to start.'); return; }
+    nameArea.style.display = 'none';
+    gameArea.style.display = 'block';
+    guessInput.focus();
+    // init game
+    gameActive = true;
+    totalAttempts = 0;
+    roundCount = 0;
+    startNewRound();
+    appendLog(`Player: ${playerName} started the game.`);
+  });
+
+  guessBtn.addEventListener('click', () => {
+    if (!gameActive) return;
+    const val = Number(guessInput.value);
+    if (!val || val < 1 || val > 100) { appendLog('Please enter a valid number between 1 and 100.'); return; }
+    attemptsThisRound++;
+    attemptsLeft--;
+    totalAttempts++;
+    updateUI();
+
+    if (val === secret){
+      appendLog(`✅ Correct! You guessed ${val} in ${attemptsThisRound} attempt(s) this round.`);
+      endGame(`Congratulations ${playerName}! You guessed the number ${val}.`, 'win');
+      return;
+    }
+
+    // wrong
+    const hint = val < secret ? 'Greater' : 'Smaller';
+    hintEl.textContent = `Hint: The secret number is ${hint} than ${val}.`;
+    appendLog(`❌ Guess ${val} — ${hint}. Attempts this round: ${attemptsThisRound}.`);
+
+    if (attemptsLeft <= 0){
+      appendLog(`Round over — maximum attempts (${maxAttemptsPerRound}) used. Secret was ${secret}. Starting new round.`);
+      startNewRound();
+    }
+    guessInput.value = '';
+    guessInput.focus();
+  });
+
+  // allow Enter key in the number input
+  guessInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') guessBtn.click(); });
+
+  giveUpBtn.addEventListener('click', () => {
+    if (!gameActive) return;
+    const confirmed = confirm('Are you sure you want to give up? This will end the game and submit your current score.');
+    if (!confirmed) return;
+    appendLog('Player gave up.');
+    endGame(`You gave up. The secret number was ${secret}.`, 'lose');
+  });
+
+  restartBtn.addEventListener('click', () => {
+    const confirmed = confirm('Restart the game? Current progress will be lost.');
+    if (!confirmed) return;
+    // reset UI to start state
+    nameArea.style.display = '';
+    gameArea.style.display = 'none';
+    resultArea.style.display = 'none';
+    playerNameInput.value = playerName; // keep name
+    guessInput.value = '';
+    logEl.innerHTML = '';
+    hintEl.textContent = '';
+    guessInput.disabled = false;
+    guessBtn.disabled = false;
+    giveUpBtn.disabled = false;
+    serverResponse.textContent = '';
+  });
+
+  // If page contains ?name= param, auto-set it in the input
+  (function prefillNameFromUrl(){
+    const n = (new URL(location.href)).searchParams.get('name');
+    if (n) playerNameInput.value = decodeURIComponent(n);
+  })();
+
+})();
+</script>
+</body>
+</html>
